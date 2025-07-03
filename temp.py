@@ -79,6 +79,7 @@ for category, urls in rss_sources.items():
         for entry in feed.entries:
             title = entry.get("title", "")
             link = entry.get("link", "")
+            
             raw_summary = entry.get("summary", entry.get("description", ""))
             summary = BeautifulSoup(raw_summary, "html.parser").get_text().strip()
             published = datetime(*entry.published_parsed[:6]) if "published_parsed" in entry else None
@@ -121,7 +122,7 @@ for category, urls in rss_sources.items():
                 # Named Entity Recognition
                 try:
                     doc = nlp(chunk)
-                    ents = [ent.text for ent in doc.ents if ent.label_ in ["ORG", "GPE", "PERSON"]]
+                    ents = [ent.text for ent in doc.ents]
                     full_entities.update(ents)
                 except:
                     pass
@@ -133,6 +134,7 @@ for category, urls in rss_sources.items():
             # Skip if tags, sentiment_score, or entities is missing
             if not tags or sentiment_score is None or not entities:
                 print(f"⏭️ Skipped: {title[:60]} — Missing tags or entities or sentiment")
+
                 continue
 
             # Insert or update in DB
