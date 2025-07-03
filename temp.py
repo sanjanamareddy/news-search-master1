@@ -82,6 +82,7 @@ for category, urls in rss_sources.items():
             
             raw_summary = entry.get("summary", entry.get("description", ""))
             summary = BeautifulSoup(raw_summary, "html.parser").get_text().strip()
+            summary2 = summary
             published = datetime(*entry.published_parsed[:6]) if "published_parsed" in entry else None
             source = f"{category} - {hostname}"
 
@@ -146,7 +147,7 @@ for category, urls in rss_sources.items():
                         tags = EXCLUDED.tags,
                         sentiment_score = EXCLUDED.sentiment_score,
                         entities = EXCLUDED.entities;
-                """, (title, link, summary, published, source, tags, sentiment_score, entities))
+                """, (title, link, summary2, published, source, tags, sentiment_score, entities))
                 print(f"✅ Saved: {title[:60]}... | Tags: {tags} | Sentiment: {sentiment_score} | Entities: {entities}")
             except Exception as e:
                 print(f"❌ Error inserting: {title[:60]}... — {e}")

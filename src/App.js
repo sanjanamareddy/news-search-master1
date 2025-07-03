@@ -78,7 +78,7 @@ function App() {
               </div>
 
               <div style={{ flex: 2 }}>
-                <p>{article.summary?.slice(0, 400)}</p>
+                <p>{article.summary}</p>
 
                 {/* Tags */}
                 <p style={{ fontSize: "0.9rem", color: "#444", marginTop: "1rem", marginBottom: "0.3rem" }}>
