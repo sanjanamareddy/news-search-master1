@@ -40,7 +40,7 @@ function App() {
         <input
           type="text"
           value={query}
-          placeholder="Search finance news..."
+          placeholder="Search finance or general news..."
           onChange={(e) => setQuery(e.target.value)}
           style={{ padding: "0.5rem", width: "300px" }}
         />
@@ -96,6 +96,14 @@ function App() {
                   {renderTags(article.entities)}
                 </div>
 
+                {/* Actions */}
+                <p style={{ fontSize: "0.9rem", color: "#444", marginBottom: "0.3rem" }}>
+                  <b>Actions:</b>
+                </p>
+                <div style={{ display: "flex", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+                  {renderTags(article.actions)}
+                </div>
+
                 {/* Sentiment */}
                 <p style={{ fontSize: "0.9rem", color: "#444" }}>
                   <b>Sentiment Score:</b>{" "}
@@ -127,3 +135,4 @@ function App() {
 }
 
 export default App;
+

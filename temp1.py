@@ -3,9 +3,8 @@ import psycopg2
 from datetime import datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from transformers import pipeline
-from newspaper import Article
-from sentence_transformers import SentenceTransformer
+from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+from sentence_transformers import SentenceTransformer, util
 import spacy
 import torch
 
@@ -14,19 +13,32 @@ sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncas
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 nlp = spacy.load("en_core_web_sm")
 
-default_summary_padding = ("This article discusses the topic in detail including relevant background, context, and implications. " * 10)
+# Predefined tags
+default_summary_padding = ("This article discusses the topic in detail including relevant background, context, and implications. "
+    "The financial and economic outlook are explored with expert commentary and statistics. "
+    "Real-world examples are provided to help understand the situation. " * 10)  # Ensure enough length for 100+ words
 
+predefined_tags = ["banking", "finance", "loan", "insurance", "stock market", "investments", "RBI", "startup"]
+tag_embeddings = embedding_model.encode(predefined_tags, convert_to_tensor=True)
+
+# RSS feed sources
 rss_sources = {
-    "General News": [
-        "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms",
-        "https://www.hindustantimes.com/rss/topnews/rssfeed.xml"
+    "Banking & Finance": [
+        "https://economictimes.indiatimes.com/rssfeeds/13357906.cms",
+        "https://www.moneycontrol.com/rss/latestnews.xml",
+        "https://www.livemint.com/rss/money"
+    ],
+    "Stock Market": [
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://finance.yahoo.com/news/rssindex"
     ]
 }
 
-# Connect to database
+# Database connection
 conn = psycopg2.connect(dbname="rssfeeds", user="rssuser", password="rsspass", host="localhost", port="5432")
 cur = conn.cursor()
 
+# Create table with entities column
 cur.execute("""
 CREATE TABLE IF NOT EXISTS articles (
     id SERIAL PRIMARY KEY,
@@ -42,6 +54,8 @@ CREATE TABLE IF NOT EXISTS articles (
 """)
 conn.commit()
 
+# Helper to split long text into chunks using SpaCy
+
 def split_to_chunks(text, max_words=400):
     doc = nlp(text)
     sentences = [sent.text for sent in doc.sents]
@@ -56,18 +70,7 @@ def split_to_chunks(text, max_words=400):
         chunks.append(chunk.strip())
     return chunks
 
-def extract_dynamic_tags(doc):
-    # Use NER and POS to extract dynamic tags (nouns, proper nouns, orgs, etc.)
-    tags = set()
-    for ent in doc.ents:
-        if ent.label_ in {"ORG", "PERSON", "GPE", "EVENT", "PRODUCT", "LAW"}:
-            tags.add(ent.text.lower())
-
-    for token in doc:
-        if token.pos_ in {"NOUN", "PROPN"} and not token.is_stop and len(token.text) > 2:
-            tags.add(token.lemma_.lower())
-    return list(tags)
-
+# Process feeds
 for category, urls in rss_sources.items():
     for url in urls:
         feed = feedparser.parse(url)
@@ -76,37 +79,46 @@ for category, urls in rss_sources.items():
         for entry in feed.entries:
             title = entry.get("title", "")
             link = entry.get("link", "")
-
+            
             raw_summary = entry.get("summary", entry.get("description", ""))
             summary = BeautifulSoup(raw_summary, "html.parser").get_text().strip()
-
-            # Try extracting full article
+            
+            from newspaper import Article
             try:
-                article = Article(link)
+
+                url = link
+                article = Article(url)
                 article.download()
                 article.parse()
-                summary2 = article.text.strip()
+                summary2 = article.text
+                print(summary2)
             except:
                 summary2 = summary
-
-            if not summary2 or len(summary2.split()) < 50:
-                continue
 
             published = datetime(*entry.published_parsed[:6]) if "published_parsed" in entry else None
             source = f"{category} - {hostname}"
 
-            while len(summary2.split()) < 100:
-                summary2 += " " + default_summary_padding
+            # Enforce minimum 100-word summary
+            while len(summary.split()) < 100:
+                summary += " " + default_summary_padding
 
-            chunks = split_to_chunks(summary2)
-            all_tags = set()
-            all_entities = set()
-            total_score = 0
-            count = 0
+            if not summary or len(summary.split()) < 100:
+                continue
+
+            # Chunk-based tagging
+            chunks = split_to_chunks(summary)
+            full_tags, full_entities = set(), set()
+            total_score, count = 0, 0
 
             for chunk in chunks:
+                # Tag extraction
+                article_embedding = embedding_model.encode(chunk, convert_to_tensor=True)
+                cos_scores = util.pytorch_cos_sim(article_embedding, tag_embeddings)[0]
+                top_tags = [predefined_tags[i] for i in cos_scores.topk(3).indices]
+                full_tags.update(top_tags)
+
+                # Sentiment score
                 try:
-                    # Sentiment
                     result = sentiment_analyzer(chunk[:512])[0]
                     label, score = result["label"], result["score"]
                     if label == "POSITIVE":
@@ -118,25 +130,27 @@ for category, urls in rss_sources.items():
                     total_score += sentiment
                     count += 1
                 except:
-                    continue
+                    pass
 
-                # NER + Tagging
+                # Named Entity Recognition
                 try:
                     doc = nlp(chunk)
-                    all_entities.update([ent.text for ent in doc.ents])
-                    tags = extract_dynamic_tags(doc)
-                    all_tags.update(tags)
+                    ents = [ent.text for ent in doc.ents]
+                    full_entities.update(ents)
                 except:
-                    continue
+                    pass
 
-            if not all_tags or count == 0:
-                print(f"⏭️ Skipped: {title[:60]} — Missing tags or sentiment")
+            tags = ", ".join(full_tags).strip()
+            sentiment_score = round(total_score / count) if count > 0 else None
+            entities = ", ".join(full_entities).strip()
+
+            # Skip if tags, sentiment_score, or entities is missing
+            if not tags or sentiment_score is None or not entities:
+                print(f"⏭️ Skipped: {title[:60]} — Missing tags or entities or sentiment")
+
                 continue
 
-            tags = ", ".join(sorted(all_tags))
-            entities = ", ".join(sorted(set(all_entities)))
-            sentiment_score = round(total_score / count)
-
+            # Insert or update in DB
             try:
                 cur.execute("""
                     INSERT INTO articles (title, link, summary, published, source, tags, sentiment_score, entities)
@@ -148,8 +162,9 @@ for category, urls in rss_sources.items():
                 """, (title, link, summary2, published, source, tags, sentiment_score, entities))
                 print(f"✅ Saved: {title[:60]}... | Tags: {tags} | Sentiment: {sentiment_score} | Entities: {entities}")
             except Exception as e:
-                print(f"❌ Error inserting: {title[:60]} — {e}")
+                print(f"❌ Error inserting: {title[:60]}... — {e}")
 
+# Finalize
 conn.commit()
 cur.close()
 conn.close()

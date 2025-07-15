@@ -30,7 +30,7 @@ def search_articles(query: str = Query(..., min_length=2)):
     conn = get_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
-        SELECT title, link, summary, published, source, tags, sentiment_score,entities
+        SELECT title, link, summary, published, source, tags, sentiment_score,entities,actions
 
         FROM articles
         WHERE title ILIKE %s OR summary ILIKE %s
